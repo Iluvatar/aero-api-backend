@@ -167,25 +167,25 @@ def getHashFromId(conn, apiIdentifier):
     apiHash = executeStatement(conn, query)
     return getSingleValue(apiHash)
 
-def generateTimeBoxes(bucketInterval, numBuckets, chunkRounding):
-    now = datetime.now(timezone.utc).isoformat()
+def generateTimeBoxes(baseTime, bucketInterval, numBuckets, chunkRounding):
     query = sql.SQL("""
         SELECT start_time, start_time + interval {bucketInterval} AS end_time
         FROM generate_series(
             date_bin(interval {bucketInterval},
-                timestamptz {now} - interval {bucketInterval} * (({numBuckets}) - 1),
+                timestamptz {baseTime} - interval {bucketInterval} * (({numBuckets}) - 1),
                 timestamptz {chunkRounding}),
-            timestamptz {now},
+            timestamptz {baseTime},
             interval {bucketInterval})
         AS start_time""").format(
         bucketInterval=sql.Literal(bucketInterval),
-        now=sql.Literal(now),
+        baseTime=sql.Literal(baseTime),
         numBuckets=sql.Literal(numBuckets),
         chunkRounding=sql.Literal(chunkRounding)
     )
     return query
 
 def chunkEntriesQuery(bucketInterval, numBuckets, chunkRounding, subquery):
+    now = datetime.now(timezone.utc).isoformat()
     query = sql.SQL("""
         WITH t AS (
             {subquery}
@@ -198,7 +198,7 @@ def chunkEntriesQuery(bucketInterval, numBuckets, chunkRounding, subquery):
         GROUP BY start_time
         ORDER BY start_time""").format(
         subquery=subquery,
-        timeBoxQuery=generateTimeBoxes(bucketInterval, numBuckets, chunkRounding)
+        timeBoxQuery=generateTimeBoxes(now, bucketInterval, numBuckets, chunkRounding)
     )
     return query
 
@@ -216,7 +216,7 @@ def getLoadAvg(bucketInterval, numBuckets, chunkRounding, subquery):
         GROUP BY start_time
         ORDER BY start_time""").format(
         subquery=subquery,
-        timeBoxQuery=generateTimeBoxes(bucketInterval, numBuckets, chunkRounding)
+        timeBoxQuery=generateTimeBoxes(now, bucketInterval, numBuckets, chunkRounding)
     )
     return query
 
