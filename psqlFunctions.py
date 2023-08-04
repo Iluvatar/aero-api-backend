@@ -220,11 +220,16 @@ def getLoadAvg(bucketInterval, numBuckets, chunkRounding, subquery):
     )
     return query
 
-def addNewApiKey(apiIdentifier, apiHash, description):
+def addNewApiKey(apiIdentifier, apiHash, ip, description):
+    now = datetime.now(timezone.utc).isoformat()
     query = sql.SQL("""
-        INSERT INTO api_keys (identifier, api_hash, description)
-        VALUES ({}, {}, {})""").format(
-        sql.Literal(apiIdentifier), sql.Literal(apiHash), sql.Literal(description)
+        INSERT INTO api_keys (timestamp, identifier, api_hash, ip, description)
+        VALUES ({}, {}, {}, {}, {})""").format(
+        sql.Literal(now),
+        sql.Literal(apiIdentifier),
+        sql.Literal(apiHash),
+        sql.Literal(ip),
+        sql.Literal(description)
     )
     return query
 

@@ -36,17 +36,26 @@ def raiseApiError(message, status=400):
 def raiseApiUnauthorizedError():
     raiseApiError("unauthorized", 401)
 
-def checkValidApiKey(conn, request):
-    apiIdAndKey = request.get_header("X-API-Key")
+def formatApiKey(apiId, apiSecret):
+    return f"{apiId}.{apiSecret}"
 
-    if not apiIdAndKey:
-        raiseApiUnauthorizedError()
-
-    parts = apiIdAndKey.split(".")
+def parseApiKey(apiKey):
+    parts = apiKey.split(".")
     if len(parts) != 2:
+        return None
+    return parts
+
+def checkValidApiKey(conn, request):
+    apiKey = request.get_header("X-API-Key")
+
+    if not apiKey:
         raiseApiUnauthorizedError()
 
-    apiId, apiKey = parts
+    parts = parseApiKey(apiKey)
+    if not parts:
+        raiseApiUnauthorizedError()
+
+    apiId, apiSecret = parts
     apiHash = pf.getHashFromId(conn, apiId)
 
     if not apiHash:
@@ -54,7 +63,7 @@ def checkValidApiKey(conn, request):
 
     ph = argon2.PasswordHasher()
     try:
-        isValid = ph.verify(apiHash, apiKey)
+        isValid = ph.verify(apiHash, apiSecret)
     except (argon2.exceptions.InvalidHash, argon2.exceptions.VerifyMismatchError):
         raiseApiUnauthorizedError()
 
@@ -204,17 +213,21 @@ def addApiKey():
     checkValidApiKey(conn, request)
 
     ph = argon2.PasswordHasher()
-    idChars = 8
 
-    apiIdentifier = hex(random.randint(0, 2 ** (idChars * 4) - 1))[2:].rjust(idChars, "0")
     apiSecret = str(uuid.UUID(bytes=secrets.token_bytes(16)))
     apiHash = ph.hash(apiSecret)
-    apiKey = f"{apiIdentifier}.{apiSecret}"
-    description = request.environ.get("REMOTE_ADDR")
+
+    ip = request.get_header("X-Real-IP")
+    description = parseParam(request, "description", ip, str)
+
+    def getRandomIdentifier():
+        idChars = 8
+        return hex(random.randint(0, 2 ** (idChars * 4) - 1))[2:].rjust(idChars, "0")
 
     for _ in range(10):
         try:
-            query = pf.addNewApiKey(apiIdentifier, apiHash, description)
+            apiId = getRandomIdentifier()
+            query = pf.addNewApiKey(apiId, apiHash, ip, description)
             pf.executeStatement(conn, query)
             break
         except psycopg2.errors.UniqueViolation:
@@ -223,7 +236,7 @@ def addApiKey():
         raiseApiError("Could not create unique identifier", status=508)
 
     return apiSuccess({
-        "apiKey": apiKey
+        "apiKey": formatApiKey(apiId, apiSecret)
     })
 
 @route("/<:re:.*>", method="OPTIONS")
