@@ -1,8 +1,13 @@
-from bottle import error, get, post, route, hook, request, response, run
+import argon2
+from bottle import error, get, post, route, hook, request, response, run, HTTPResponse
 from datetime import datetime, timedelta, timezone
 import json
 import psycopg2
 import pytz
+import random
+import re
+import secrets
+import uuid
 
 import psqlFunctions as pf
 from psqlFunctions import And, Or, Not, Query
@@ -32,8 +37,28 @@ def raiseApiUnauthorizedError():
     raiseApiError("unauthorized", 401)
 
 def checkValidApiKey(conn, request):
-    apiKey = request.get_header("X-API-Key")
-    if not pf.isValidApiKey(conn, apiKey):
+    apiIdAndKey = request.get_header("X-API-Key")
+
+    if not apiIdAndKey:
+        raiseApiUnauthorizedError()
+
+    parts = apiIdAndKey.split(".")
+    if len(parts) != 2:
+        raiseApiUnauthorizedError()
+
+    apiId, apiKey = parts
+    apiHash = pf.getHashFromId(conn, apiId)
+
+    if not apiHash:
+        raiseApiUnauthorizedError()
+
+    ph = argon2.PasswordHasher()
+    try:
+        isValid = ph.verify(apiHash, apiKey)
+    except (argon2.exceptions.InvalidHash, argon2.exceptions.VerifyMismatchError):
+        raiseApiUnauthorizedError()
+
+    if not isValid:
         raiseApiUnauthorizedError()
 
 def loadRowToJson(row):
@@ -79,6 +104,11 @@ def boolean(b):
 def date(d):
     return datetime.fromisoformat(d).isoformat()
 
+def intervalType(i):
+    if not re.fullmatch(r"\d+ \w+", i):
+        raise ValueError("Bad interval format")
+    return i
+
 def commaList(entryType=str):
     return lambda l: [entryType(entry) for entry in l.split(",")] if l else []
 
@@ -108,7 +138,7 @@ def getFilters(request):
     return filters
 
 def getChunkingParams(request):
-    interval = parseParam(request, "interval", "1 hour", str)
+    interval = parseParam(request, "interval", "1 hour", intervalType)
     numBuckets = parseParam(request, "num_buckets", 12, int)
     chunkRounding = parseParam(request, "chunk_rounding",
         datetime(2000, 1, 1, tzinfo=pytz.timezone("UTC")).isoformat(), date)
@@ -173,10 +203,27 @@ def getRequests():
 def addApiKey():
     checkValidApiKey(conn, request)
 
-    newKey = pf.addNewApiKey(conn)
+    ph = argon2.PasswordHasher()
+    idChars = 8
+
+    apiIdentifier = hex(random.randint(0, 2 ** (idChars * 4) - 1))[2:].rjust(idChars, "0")
+    apiSecret = str(uuid.UUID(bytes=secrets.token_bytes(16)))
+    apiHash = ph.hash(apiSecret)
+    apiKey = f"{apiIdentifier}.{apiSecret}"
+    description = request.environ.get("REMOTE_ADDR")
+
+    for _ in range(10):
+        try:
+            query = pf.addNewApiKey(apiIdentifier, apiHash, description)
+            pf.executeStatement(conn, query)
+            break
+        except psycopg2.errors.UniqueViolation:
+            pass
+    else:
+        raiseApiError("Could not create unique identifier", status=508)
 
     return apiSuccess({
-        "apiKey": newKey
+        "apiKey": apiKey
     })
 
 @route("/<:re:.*>", method="OPTIONS")

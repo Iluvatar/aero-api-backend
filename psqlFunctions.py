@@ -49,7 +49,10 @@ def isValidUuid(uuid):
     return isinstance(uuid, str) and re.fullmatch(uuidRegex, uuid)
 
 def getSingleValue(data):
-    return data[0][0]
+    try:
+        return data[0][0]
+    except (TypeError, IndexError):
+        return None
 
 def And(expressions):
     if len(expressions) == 0:
@@ -158,13 +161,11 @@ def statusRangeFilter(start, end):
 
 
 
-def isValidApiKey(conn, key):
-    if not isValidUuid(key):
-        return False
-    query = sql.SQL("SELECT EXISTS (SELECT 1 FROM api_keys WHERE api_key = {})").format(
-        sql.Literal(key))
-    isValid = executeStatement(conn, query)
-    return getSingleValue(isValid)
+def getHashFromId(conn, apiIdentifier):
+    query = sql.SQL("SELECT api_hash FROM api_keys WHERE identifier = {}").format(
+        sql.Literal(apiIdentifier))
+    apiHash = executeStatement(conn, query)
+    return getSingleValue(apiHash)
 
 def generateTimeBoxes(bucketInterval, numBuckets, chunkRounding):
     now = datetime.now(timezone.utc).isoformat()
@@ -219,8 +220,11 @@ def getLoadAvg(bucketInterval, numBuckets, chunkRounding, subquery):
     )
     return query
 
-def addNewApiKey(conn):
-    query = sql.SQL("INSERT INTO api_keys (api_key) VALUES (gen_random_uuid()) RETURNING api_key")
-    newKey = executeStatement(conn, query)
-    return getSingleValue(newKey)
+def addNewApiKey(apiIdentifier, apiHash, description):
+    query = sql.SQL("""
+        INSERT INTO api_keys (identifier, api_hash, description)
+        VALUES ({}, {}, {})""").format(
+        sql.Literal(apiIdentifier), sql.Literal(apiHash), sql.Literal(description)
+    )
+    return query
 
